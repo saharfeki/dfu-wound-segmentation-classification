@@ -109,8 +109,8 @@ abstract interface class PatientRepository {
 
 class DemoRepository implements PatientRepository {
   final List<Patient> _patients = [
-    Patient(name: 'Amina Yusuf', externalRef: 'DFU-1042'),
-    Patient(name: 'Thomas Reed', externalRef: 'DFU-1047'),
+    Patient(name: 'Amina Chelly', externalRef: 'DFU-1000'),
+    Patient(name: 'Ahmed Aloulou', externalRef: 'DFU-1001'),
   ];
 
   @override
@@ -148,6 +148,7 @@ class AnalysisResult {
     required this.status,
     this.fellBack,
     this.maskUrl,
+    this.overlayUrl,
     this.bbox,
     this.grade,
     this.classificationStatus,
@@ -158,6 +159,7 @@ class AnalysisResult {
   final String status;
   final bool? fellBack;
   final String? maskUrl;
+  final String? overlayUrl;
   final List<dynamic>? bbox;
   final int? grade;
   final String? classificationStatus;
@@ -284,6 +286,7 @@ class ApiAnalysisRepository implements AnalysisRepository {
         status: data['status'] as String,
         fellBack: data['fell_back'] as bool?,
         maskUrl: data['mask_url'] as String?,
+        overlayUrl: data['overlay_url'] as String?,
         bbox: data['bbox'] as List<dynamic>?,
         grade: data['grade'] as int?,
         classificationStatus: data['classification_status'] as String?,
@@ -1209,7 +1212,10 @@ class _ImageReviewScreenState extends State<ImageReviewScreen> {
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
         MaterialPageRoute<void>(
-          builder: (_) => AnalysisResultsScreen(result: processResult),
+          builder: (_) => AnalysisResultsScreen(
+            result: processResult,
+            originalImage: widget.image,
+          ),
         ),
       );
     } on AnalysisUploadException catch (error) {
@@ -1323,9 +1329,24 @@ class _ImageReviewScreenState extends State<ImageReviewScreen> {
 }
 
 class AnalysisResultsScreen extends StatelessWidget {
-  const AnalysisResultsScreen({super.key, required this.result});
+  const AnalysisResultsScreen({
+    super.key,
+    required this.result,
+    required this.originalImage,
+  });
 
   final AnalysisResult result;
+  final SelectedImage originalImage;
+
+  String? _assetUrl(String? path) {
+    if (path == null || path.isEmpty) return null;
+    if (path.startsWith('http://') || path.startsWith('https://')) return path;
+    const baseUrl = String.fromEnvironment(
+      'API_BASE_URL',
+      defaultValue: 'http://127.0.0.1:8000',
+    );
+    return Uri.parse(baseUrl).resolve(path).toString();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1342,6 +1363,13 @@ class AnalysisResultsScreen extends StatelessWidget {
           const SizedBox(height: 12),
           Text('Analysis ${result.analysisId}'),
           const SizedBox(height: 20),
+          if (result.overlayUrl != null) ...[
+            _SegmentationPreview(
+              originalImage: originalImage,
+              overlayUrl: _assetUrl(result.overlayUrl)!,
+            ),
+            const SizedBox(height: 20),
+          ],
           if (result.grade != null) _ResultRow('Grade', '${result.grade}'),
           if (result.classificationStatus != null)
             _ResultRow('Classification', result.classificationStatus!),
@@ -1356,6 +1384,59 @@ class AnalysisResultsScreen extends StatelessWidget {
             label: const Text('Back to patient workspace'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _SegmentationPreview extends StatelessWidget {
+  const _SegmentationPreview({
+    required this.originalImage,
+    required this.overlayUrl,
+  });
+
+  final SelectedImage originalImage;
+  final String overlayUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    final imageBytes = Uint8List.fromList(originalImage.bytes);
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        color: const Color(0xFFF1F4FA),
+        constraints: const BoxConstraints(minHeight: 220, maxHeight: 440),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Image.memory(imageBytes, fit: BoxFit.contain),
+            Image.network(
+              overlayUrl,
+              fit: BoxFit.contain,
+              errorBuilder: (context, error, stackTrace) => const SizedBox(
+                height: 220,
+                child: Center(child: Text('Segmentation overlay unavailable.')),
+              ),
+            ),
+            Positioned(
+              left: 12,
+              bottom: 12,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: .68),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  child: Text(
+                    'Red overlay: detected wound region',
+                    style: TextStyle(color: Colors.white, fontSize: 12),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
