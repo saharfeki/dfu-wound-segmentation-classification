@@ -38,9 +38,11 @@ class _DfuAppState extends State<DfuApp> {
 }
 
 AnalysisRepository _buildAnalysisRepository() {
-  const apiBaseUrl = String.fromEnvironment('API_BASE_URL');
+  const apiBaseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://127.0.0.1:8000',
+  );
   const accessToken = String.fromEnvironment('SUPABASE_ACCESS_TOKEN');
-  if (apiBaseUrl.isEmpty) return DemoAnalysisRepository();
   return ApiAnalysisRepository(
     Dio(BaseOptions(baseUrl: apiBaseUrl)),
     () => accessToken,
@@ -140,12 +142,36 @@ class AnalysisSubmission {
   final String status;
 }
 
+class AnalysisResult {
+  AnalysisResult({
+    required this.analysisId,
+    required this.status,
+    this.fellBack,
+    this.maskUrl,
+    this.bbox,
+    this.grade,
+    this.classificationStatus,
+    this.message,
+  });
+
+  final String analysisId;
+  final String status;
+  final bool? fellBack;
+  final String? maskUrl;
+  final List<dynamic>? bbox;
+  final int? grade;
+  final String? classificationStatus;
+  final String? message;
+}
+
 abstract interface class AnalysisRepository {
   Future<AnalysisSubmission> submit({
     required String patientId,
     required SelectedImage image,
     void Function(double progress)? onProgress,
   });
+
+  Future<AnalysisResult> process(String analysisId);
 }
 
 class DemoAnalysisRepository implements AnalysisRepository {
@@ -161,6 +187,19 @@ class DemoAnalysisRepository implements AnalysisRepository {
     return AnalysisSubmission(
       analysisId: 'demo-${DateTime.now().millisecondsSinceEpoch}',
       status: 'pending',
+    );
+  }
+
+  @override
+  Future<AnalysisResult> process(String analysisId) async {
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    return AnalysisResult(
+      analysisId: analysisId,
+      status: 'complete',
+      fellBack: false,
+      grade: 2,
+      classificationStatus: 'CONFIDENT',
+      message: 'Demo result - review the wound classification clinically.',
     );
   }
 }
@@ -187,9 +226,6 @@ class ApiAnalysisRepository implements AnalysisRepository {
     void Function(double progress)? onProgress,
   }) async {
     final token = _getAccessToken().trim();
-    if (token.isEmpty) {
-      throw AnalysisUploadException('Session expired - please sign in again.');
-    }
     final extension = image.name.toLowerCase().endsWith('.png') ? 'png' : 'jpg';
     final formData = FormData.fromMap({
       'patient_id': patientId,
@@ -203,7 +239,9 @@ class ApiAnalysisRepository implements AnalysisRepository {
       final response = await _dio.post<Map<String, dynamic>>(
         '/analyses',
         data: formData,
-        options: Options(headers: {'Authorization': 'Bearer $token'}),
+        options: Options(
+          headers: token.isEmpty ? null : {'Authorization': 'Bearer $token'},
+        ),
         onSendProgress: (sent, total) {
           if (total > 0) onProgress?.call(sent / total);
         },
@@ -225,7 +263,44 @@ class ApiAnalysisRepository implements AnalysisRepository {
     }
   }
 
+  @override
+  Future<AnalysisResult> process(String analysisId) async {
+    final token = _getAccessToken().trim();
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/analyses/$analysisId/process',
+        options: Options(
+          headers: token.isEmpty ? null : {'Authorization': 'Bearer $token'},
+        ),
+      );
+      final data = response.data;
+      if (data == null || data['analysis_id'] is! String || data['status'] is! String) {
+        throw AnalysisUploadException(
+          'Processing failed - the server returned an invalid response.',
+        );
+      }
+      return AnalysisResult(
+        analysisId: data['analysis_id'] as String,
+        status: data['status'] as String,
+        fellBack: data['fell_back'] as bool?,
+        maskUrl: data['mask_url'] as String?,
+        bbox: data['bbox'] as List<dynamic>?,
+        grade: data['grade'] as int?,
+        classificationStatus: data['classification_status'] as String?,
+        message: data['message'] as String?,
+      );
+    } on DioException catch (error) {
+      throw AnalysisUploadException(_mapError(error));
+    }
+  }
+
   String _mapError(DioException error) {
+    if (error.type == DioExceptionType.connectionError ||
+        error.type == DioExceptionType.connectionTimeout ||
+        error.type == DioExceptionType.receiveTimeout ||
+        error.type == DioExceptionType.sendTimeout) {
+      return 'Cannot reach the analysis server at ${_dio.options.baseUrl}. Start the backend and try again.';
+    }
     switch (error.response?.statusCode) {
       case 401:
         return 'Session expired - please sign in again.';
@@ -1129,7 +1204,14 @@ class _ImageReviewScreenState extends State<ImageReviewScreen> {
           ],
         ),
       );
-      if (mounted) Navigator.of(context).popUntil((route) => route.isFirst);
+      if (!mounted) return;
+      final processResult = await widget.analysisRepository.process(result.analysisId);
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute<void>(
+          builder: (_) => AnalysisResultsScreen(result: processResult),
+        ),
+      );
     } on AnalysisUploadException catch (error) {
       if (mounted) {
         setState(() {
@@ -1235,6 +1317,63 @@ class _ImageReviewScreenState extends State<ImageReviewScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class AnalysisResultsScreen extends StatelessWidget {
+  const AnalysisResultsScreen({super.key, required this.result});
+
+  final AnalysisResult result;
+
+  @override
+  Widget build(BuildContext context) {
+    final isFallback = result.fellBack == true;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Analysis results')),
+      body: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          Text(
+            isFallback ? 'Boundary not detected' : 'Analysis complete',
+            style: Theme.of(context).textTheme.headlineSmall,
+          ),
+          const SizedBox(height: 12),
+          Text('Analysis ${result.analysisId}'),
+          const SizedBox(height: 20),
+          if (result.grade != null) _ResultRow('Grade', '${result.grade}'),
+          if (result.classificationStatus != null)
+            _ResultRow('Classification', result.classificationStatus!),
+          if (result.message != null) ...[
+            const SizedBox(height: 20),
+            Text(result.message!),
+          ],
+          const SizedBox(height: 28),
+          FilledButton.icon(
+            onPressed: () => Navigator.of(context).popUntil((route) => route.isFirst),
+            icon: const Icon(Icons.arrow_back),
+            label: const Text('Back to patient workspace'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ResultRow extends StatelessWidget {
+  const _ResultRow(this.label, this.value);
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [Text(label), Text(value, style: const TextStyle(fontWeight: FontWeight.w700))],
       ),
     );
   }
