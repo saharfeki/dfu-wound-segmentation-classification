@@ -3,24 +3,51 @@ Update this file after every meaningful implementation change.
 
 ## Current Phase
 
-- Not started
+- Feature 4 guided camera viewfinder: real camera client in progress
 
 ## Current Goal
 
-- Initial repository setup, Flutter environment configuration, and backend FastAPI scaffold for the 3-model AI cascade.
+- Replace the mocked camera surface with a real preview and capture flow while preserving review/upload behavior.
 
 ## Completed
 
-- None yet.
+- Replaced the stock counter app with the MedConnect trusted-clinic-blue theme.
+- Added login screen with email/password validation and signed-in session transition.
+- Added patient list with name/external-reference search and patient cards.
+- Added new-patient form with required full name and optional patient ID.
+- Added logout action and focused widget coverage for valid and invalid login input.
+- Added patient detail entry point with a New Analysis action.
+- Added Take Photo and Upload from Files choice screen using `image_picker`.
+- Added guided camera surface with advisory lighting/framing feedback and always-enabled capture.
+- Added in-memory image review with JPEG/PNG, 15 MB, and 400x400 resolution validation.
+- Added pending upload state through an `AnalysisRepository` demo adapter and navigation back to the patient workspace.
+- Added `ApiAnalysisRepository` using Dio multipart upload to `/analyses`.
+- Added bearer-token injection, source/patient form fields, response parsing, and status-specific upload errors.
+- Added visible upload percentage/progress state and retry behavior using the same in-memory image.
+- Added build-time `API_BASE_URL` and `SUPABASE_ACCESS_TOKEN` selection while retaining the demo adapter when no API URL is configured.
+- Replaced the upload branch's gallery-based picker with `file_picker`, explicitly filtering JPEG/PNG files and retaining selected bytes in memory.
+- Added user-facing handling when a selected file cannot be opened or read.
+- Fixed Edge/Web file-picker activation by invoking `pickFiles()` synchronously inside the upload tile's click handler; selected-file processing now runs after the picker future resolves.
+- Added the `camera` package and replaced the placeholder guided-camera icon with a real `CameraController` and `CameraPreview`.
+- Added camera initialization, no-camera/error states, lifecycle disposal, and duplicate-capture protection.
+- Captured camera images now use `CameraController.takePicture()` and continue to the existing in-memory review/upload flow.
+- Documented Feature 4 implementation, acceptance status, platform setup, and known feedback boundaries in `contextDFU/features/4-camera.md`.
 
 ## In Progress
 
-- Initial repository scaffold and environment configuration.
+- The Flutter client is ready for the endpoint, but this workspace contains no FastAPI service, database schema, storage configuration, or live Supabase token provider.
+- File selection now uses the desktop/web-friendly file picker; live device/browser verification still depends on the target platform's file chooser.
+- Real camera verification still requires a camera-capable browser/device and granted camera permission.
 
 ## Next Up
 
-- Set up Flutter application skeleton with the MedConnect blue-wave theme tokens, routing, and custom camera module with lighting/focus feedback.
-- Build basic FastAPI backend scaffold with endpoint routing for `/api/v1/analyze-ulcer`.
+- Add `supabase_flutter` initialization and replace `DemoRepository` with Supabase Auth/session persistence.
+- Add the FastAPI `/patients` routes and connect patient list/create/search to authenticated requests.
+- Implement the FastAPI `/analyses` route, server-side validation, storage upload, and `analyses` insert in the backend workspace.
+- Provide a runtime Supabase session token callback instead of the build-time token placeholder.
+- Connect the guided camera surface to a live `camera` preview and platform focus/exposure state.
+- Add camera luminance sampling and camera-reported focus/exposure indicators after validating platform API support.
+- Add patient detail/history navigation in Feature 6.
 
 ## Open Questions
 
@@ -38,4 +65,7 @@ Update this file after every meaningful implementation change.
 ## Session Notes
 
 - Project context, system boundaries, and UI context ("Trusted Clinic Blue" theme) have been finalized.
-- Start the next session by initializing the Flutter project (`lib/`) and FastAPI server (`app/`), focusing first on setting up the custom camera view with real-time feedback and setting up mock endpoints for the inference pipeline.
+- Started Feature 1 with a local Flutter vertical slice. The Supabase/API boundary is intentionally isolated behind `PatientRepository` so the UI can be validated before backend credentials and routes exist.
+- Started Feature 2 with a local Flutter acquisition slice. `AnalysisRepository` isolates the future FastAPI/S3 upload, while selected image bytes remain in memory until submission succeeds.
+- Implemented Feature 2b on the client. The API adapter is selected with `--dart-define=API_BASE_URL=...`; until that is supplied, the app remains runnable with the demo adapter. `SUPABASE_ACCESS_TOKEN` is temporary until Supabase Auth session wiring is added.
+- Implemented Feature 4's real camera preview and capture path. The guide and lighting message remain advisory overlays; luminance sampling and focus/exposure indicators are explicitly tracked as follow-up work.
