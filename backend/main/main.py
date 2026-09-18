@@ -1,6 +1,9 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from api import analyse, analyses
 from services import ai_pipeline
 
@@ -17,6 +20,12 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+app.mount(
+    "/storage",
+    StaticFiles(directory=Path(__file__).parent.parent / "storage"),
+    name="storage",
 )
 
 @app.get("/")

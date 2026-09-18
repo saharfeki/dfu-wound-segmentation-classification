@@ -28,13 +28,29 @@ async def process_analysis(analysis_id: uuid.UUID):
     mask_path = f"masks/{analysis.patient_id}/{analysis_id}/mask.png"
     await upload_bytes(mask_path, mask_png, content_type="image/png")
 
+    overlay = np.zeros((*result["mask_full"].shape, 4), dtype=np.uint8)
+    overlay[..., 0] = 255
+    overlay[..., 3] = (result["mask_full"] > 0).astype(np.uint8) * 115
+    encoded_overlay_ok, encoded_overlay = cv2.imencode(".png", overlay)
+    if not encoded_overlay_ok:
+        raise HTTPException(status_code=500, detail="The segmentation overlay could not be encoded.")
+    overlay_path = f"masks/{analysis.patient_id}/{analysis_id}/overlay.png"
+    await upload_bytes(overlay_path, encoded_overlay.tobytes(), content_type="image/png")
+
     if result["fell_back"]:
-        await update_analysis(analysis_id, status="complete", fell_back=True, mask_path=mask_path)
+        await update_analysis(
+            analysis_id,
+            status="complete",
+            fell_back=True,
+            mask_path=mask_path,
+            overlay_path=overlay_path,
+        )
         return {
             "analysis_id": str(analysis_id),
             "status": "complete",
             "fell_back": True,
-            "mask_url": mask_path,
+            "mask_url": f"/storage/{mask_path}",
+            "overlay_url": f"/storage/{overlay_path}",
             "message": "No clear wound boundary detected — try retaking the photo.",
         }
 
@@ -44,6 +60,7 @@ async def process_analysis(analysis_id: uuid.UUID):
         status="complete",
         fell_back=False,
         mask_path=mask_path,
+        overlay_path=overlay_path,
         bbox=result["bbox"],
         grade=c["predicted_grade"],
         class_probabilities=c["class_probabilities"],
@@ -54,7 +71,8 @@ async def process_analysis(analysis_id: uuid.UUID):
         "analysis_id": str(analysis_id),
         "status": "complete",
         "fell_back": False,
-        "mask_url": mask_path,
+        "mask_url": f"/storage/{mask_path}",
+        "overlay_url": f"/storage/{overlay_path}",
         "bbox": result["bbox"],
         "grade": c["predicted_grade"],
         "class_probabilities": c["class_probabilities"],

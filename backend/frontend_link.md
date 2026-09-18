@@ -2,11 +2,19 @@
 
 ### Local Edge Instructions
 
-Uvicorn is configured for plain HTTP during local development. Start it from
-the `backend` directory:
+Uvicorn is configured for plain HTTP during local development. This workspace
+folder is already the `backend` directory, so start it without a second
+`backend` path or `--app-dir`:
 
 ```powershell
 .\venv\Scripts\python.exe -m uvicorn main.main:app --host 0.0.0.0 --port 8000
+```
+
+If you run the command from the project root (`dfu-wound-segmentation-classification`),
+use the corresponding root-relative paths instead:
+
+```powershell
+.\backend\venv\Scripts\python.exe -m uvicorn --app-dir backend main.main:app --host 0.0.0.0 --port 8000
 ```
 
 Check the backend in Edge at `http://127.0.0.1:8000/` or
