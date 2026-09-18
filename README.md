@@ -65,7 +65,7 @@ Confidence Assessment
      └─────────────── Low Confidence / Close Margin ► Manual Clinical Review
 ```
 
-For a detailed description of the application interface and functionality, see the main [`README.md`](README.md) documentation.
+For a detailed description of the application interface and functionality, See the [main documentation](https://github.com/saharfeki/dfu-wound-segmentation-classification/blob/main/dfu_app/README.md) for more details.
 
 ---
 
