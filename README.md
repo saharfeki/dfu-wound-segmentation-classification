@@ -159,7 +159,13 @@ This design provides a simpler and more robust classification pathway while pres
 ---
 
 ## Severity Classification
-### Classification (progressive improvements) | Stage | Accuracy | Macro F1 | MAE | QWK | |---|---|---|---|---| | Initial (RGB-only vs. 4-channel) | 56.7% | 54.6% / 55.1% | — | — | | + Optimized training strategy | 61.7% | 59.3% | — | — | | Intermediate final model | 75.3% | — | 0.291 | 0.813 | | **Final model (after refinement)** | **80.64%** | **80.07%** | **0.209** | **0.888** |
+### Classification 
+| Stage | Accuracy | Macro F1 | MAE | QWK |
+|---|---|---|---|---|
+| Initial (RGB-only vs. 4-channel) | 56.7% | 54.6% / 55.1% | — | — |
+| + Optimized training strategy | 61.7% | 59.3% | — | — |
+| Intermediate final model | 75.3% | — | 0.291 | 0.813 |
+| **Final model (after refinement)** | **80.64%** | **80.07%** | **0.209** | **0.888** |
 The final classification model achieved the following results during evaluation:
 
 | Metric | Final Result |
