@@ -3,24 +3,29 @@ Update this file after every meaningful implementation change.
 
 ## Current Phase
 
-- Not started
+- Feature 1 authentication and patient context: client foundation in progress
 
 ## Current Goal
 
-- Initial repository setup, Flutter environment configuration, and backend FastAPI scaffold for the 3-model AI cascade.
+- Deliver the first usable authentication and patient-context slice in Flutter.
 
 ## Completed
 
-- None yet.
+- Replaced the stock counter app with the MedConnect trusted-clinic-blue theme.
+- Added login screen with email/password validation and signed-in session transition.
+- Added patient list with name/external-reference search and patient cards.
+- Added new-patient form with required full name and optional patient ID.
+- Added logout action and focused widget coverage for valid and invalid login input.
 
 ## In Progress
 
-- Initial repository scaffold and environment configuration.
+- Supabase Auth and FastAPI patient endpoints still need wiring; the current repository is an in-memory demo adapter.
 
 ## Next Up
 
-- Set up Flutter application skeleton with the MedConnect blue-wave theme tokens, routing, and custom camera module with lighting/focus feedback.
-- Build basic FastAPI backend scaffold with endpoint routing for `/api/v1/analyze-ulcer`.
+- Add `supabase_flutter` initialization and replace `DemoRepository` with Supabase Auth/session persistence.
+- Add the FastAPI `/patients` routes and connect patient list/create/search to authenticated requests.
+- Add patient detail/history navigation in Feature 6.
 
 ## Open Questions
 
@@ -38,4 +43,4 @@ Update this file after every meaningful implementation change.
 ## Session Notes
 
 - Project context, system boundaries, and UI context ("Trusted Clinic Blue" theme) have been finalized.
-- Start the next session by initializing the Flutter project (`lib/`) and FastAPI server (`app/`), focusing first on setting up the custom camera view with real-time feedback and setting up mock endpoints for the inference pipeline.
+- Started Feature 1 with a local Flutter vertical slice. The Supabase/API boundary is intentionally isolated behind `PatientRepository` so the UI can be validated before backend credentials and routes exist.
