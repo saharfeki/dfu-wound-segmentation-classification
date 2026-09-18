@@ -1,3 +1,9 @@
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+
+import 'package:camera/camera.dart';
+import 'package:dio/dio.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 void main() => runApp(const DfuApp());
@@ -11,6 +17,7 @@ class DfuApp extends StatefulWidget {
 
 class _DfuAppState extends State<DfuApp> {
   final _repository = DemoRepository();
+  final _analysisRepository = _buildAnalysisRepository();
   bool _signedIn = false;
 
   @override
@@ -22,11 +29,22 @@ class _DfuAppState extends State<DfuApp> {
       home: _signedIn
           ? PatientListScreen(
               repository: _repository,
+              analysisRepository: _analysisRepository,
               onSignOut: () => setState(() => _signedIn = false),
             )
           : LoginScreen(onSignedIn: () => setState(() => _signedIn = true)),
     );
   }
+}
+
+AnalysisRepository _buildAnalysisRepository() {
+  const apiBaseUrl = String.fromEnvironment('API_BASE_URL');
+  const accessToken = String.fromEnvironment('SUPABASE_ACCESS_TOKEN');
+  if (apiBaseUrl.isEmpty) return DemoAnalysisRepository();
+  return ApiAnalysisRepository(
+    Dio(BaseOptions(baseUrl: apiBaseUrl)),
+    () => accessToken,
+  );
 }
 
 ThemeData _buildTheme() {
@@ -99,6 +117,128 @@ class DemoRepository implements PatientRepository {
   @override
   Future<void> addPatient(Patient patient) async =>
       _patients.insert(0, patient);
+}
+
+enum ImageSourceType { camera, upload }
+
+class SelectedImage {
+  SelectedImage({
+    required this.bytes,
+    required this.name,
+    required this.source,
+  });
+
+  final List<int> bytes;
+  final String name;
+  final ImageSourceType source;
+}
+
+class AnalysisSubmission {
+  AnalysisSubmission({required this.analysisId, required this.status});
+
+  final String analysisId;
+  final String status;
+}
+
+abstract interface class AnalysisRepository {
+  Future<AnalysisSubmission> submit({
+    required String patientId,
+    required SelectedImage image,
+    void Function(double progress)? onProgress,
+  });
+}
+
+class DemoAnalysisRepository implements AnalysisRepository {
+  @override
+  Future<AnalysisSubmission> submit({
+    required String patientId,
+    required SelectedImage image,
+    void Function(double progress)? onProgress,
+  }) async {
+    onProgress?.call(0);
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    onProgress?.call(1);
+    return AnalysisSubmission(
+      analysisId: 'demo-${DateTime.now().millisecondsSinceEpoch}',
+      status: 'pending',
+    );
+  }
+}
+
+class AnalysisUploadException implements Exception {
+  AnalysisUploadException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+class ApiAnalysisRepository implements AnalysisRepository {
+  ApiAnalysisRepository(this._dio, this._getAccessToken);
+
+  final Dio _dio;
+  final String Function() _getAccessToken;
+
+  @override
+  Future<AnalysisSubmission> submit({
+    required String patientId,
+    required SelectedImage image,
+    void Function(double progress)? onProgress,
+  }) async {
+    final token = _getAccessToken().trim();
+    if (token.isEmpty) {
+      throw AnalysisUploadException('Session expired - please sign in again.');
+    }
+    final extension = image.name.toLowerCase().endsWith('.png') ? 'png' : 'jpg';
+    final formData = FormData.fromMap({
+      'patient_id': patientId,
+      'source': image.source.name,
+      'image': MultipartFile.fromBytes(
+        image.bytes,
+        filename: image.name.isEmpty ? 'wound.$extension' : image.name,
+      ),
+    });
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/analyses',
+        data: formData,
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+        onSendProgress: (sent, total) {
+          if (total > 0) onProgress?.call(sent / total);
+        },
+      );
+      final data = response.data;
+      if (data == null ||
+          data['analysis_id'] is! String ||
+          data['status'] is! String) {
+        throw AnalysisUploadException(
+          'Upload failed - the server returned an invalid response.',
+        );
+      }
+      return AnalysisSubmission(
+        analysisId: data['analysis_id'] as String,
+        status: data['status'] as String,
+      );
+    } on DioException catch (error) {
+      throw AnalysisUploadException(_mapError(error));
+    }
+  }
+
+  String _mapError(DioException error) {
+    switch (error.response?.statusCode) {
+      case 401:
+        return 'Session expired - please sign in again.';
+      case 404:
+        return 'Patient record not found.';
+      case 413:
+        return 'Image is too large (maximum 15 MB).';
+      case 422:
+        return 'Image type or resolution is not supported.';
+      default:
+        return 'Upload failed - check your connection and try again.';
+    }
+  }
 }
 
 class LoginScreen extends StatefulWidget {
@@ -255,10 +395,12 @@ class PatientListScreen extends StatefulWidget {
   const PatientListScreen({
     super.key,
     required this.repository,
+    required this.analysisRepository,
     required this.onSignOut,
   });
 
   final PatientRepository repository;
+  final AnalysisRepository analysisRepository;
   final VoidCallback onSignOut;
 
   @override
@@ -338,8 +480,10 @@ class _PatientListScreenState extends State<PatientListScreen> {
                       itemCount: patients.length,
                       separatorBuilder: (context, index) =>
                           const SizedBox(height: 10),
-                      itemBuilder: (context, index) =>
-                          PatientCard(patient: patients[index]),
+                      itemBuilder: (context, index) => PatientCard(
+                        patient: patients[index],
+                        analysisRepository: widget.analysisRepository,
+                      ),
                     ),
             ),
           ],
@@ -355,9 +499,14 @@ class _PatientListScreenState extends State<PatientListScreen> {
 }
 
 class PatientCard extends StatelessWidget {
-  const PatientCard({super.key, required this.patient});
+  const PatientCard({
+    super.key,
+    required this.patient,
+    required this.analysisRepository,
+  });
 
   final Patient patient;
+  final AnalysisRepository analysisRepository;
 
   @override
   Widget build(BuildContext context) {
@@ -380,9 +529,12 @@ class PatientCard extends StatelessWidget {
         ),
         subtitle: Text(patient.externalRef ?? 'No patient ID'),
         trailing: const Icon(Icons.chevron_right),
-        onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Patient history is coming in Feature 6.'),
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => PatientDetailScreen(
+              patient: patient,
+              analysisRepository: analysisRepository,
+            ),
           ),
         ),
       ),
@@ -466,6 +618,623 @@ class _NewPatientSheetState extends State<NewPatientSheet> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class PatientDetailScreen extends StatelessWidget {
+  const PatientDetailScreen({
+    super.key,
+    required this.patient,
+    required this.analysisRepository,
+  });
+
+  final Patient patient;
+  final AnalysisRepository analysisRepository;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Patient details')),
+      body: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            CircleAvatar(
+              radius: 32,
+              backgroundColor: const Color(0xFFE8EEFF),
+              foregroundColor: const Color(0xFF2D60DB),
+              child: Text(
+                patient.name.substring(0, 1).toUpperCase(),
+                style: const TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              patient.name,
+              style: Theme.of(context).textTheme.headlineSmall,
+            ),
+            const SizedBox(height: 6),
+            Text(patient.externalRef ?? 'No patient ID'),
+            const SizedBox(height: 32),
+            SizedBox(
+              width: double.infinity,
+              height: 56,
+              child: FilledButton.icon(
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => NewAnalysisScreen(
+                      patientId: patient.externalRef ?? patient.name,
+                      analysisRepository: analysisRepository,
+                    ),
+                  ),
+                ),
+                icon: const Icon(Icons.add_a_photo_outlined),
+                label: const Text('New analysis'),
+              ),
+            ),
+            const SizedBox(height: 32),
+            Text(
+              'Analysis history',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 10),
+            const Text('No analyses have been recorded for this patient yet.'),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class NewAnalysisScreen extends StatelessWidget {
+  const NewAnalysisScreen({
+    super.key,
+    required this.patientId,
+    required this.analysisRepository,
+  });
+
+  final String patientId;
+  final AnalysisRepository analysisRepository;
+
+  Future<void> _openPicker(BuildContext context, ImageSourceType source) async {
+    if (source == ImageSourceType.camera) {
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => GuidedCameraScreen(
+            patientId: patientId,
+            analysisRepository: analysisRepository,
+          ),
+        ),
+      );
+      return;
+    }
+    _openFilePicker(context);
+  }
+
+  void _openFilePicker(BuildContext context) {
+    // Keep this call synchronous with the browser click so Edge allows the dialog.
+    try {
+      FilePicker.platform
+          .pickFiles(
+            type: FileType.custom,
+            allowedExtensions: ['jpg', 'jpeg', 'png'],
+            withData: true,
+          )
+          .then((result) async {
+            if (!context.mounted || result == null || result.files.isEmpty) {
+              return;
+            }
+            final picked = result.files.single;
+            final bytes = picked.bytes;
+            if (bytes == null || bytes.isEmpty) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('The selected file could not be read.'),
+                  ),
+                );
+              }
+              return;
+            }
+            await Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => ImageReviewScreen(
+                  patientId: patientId,
+                  image: SelectedImage(
+                    bytes: bytes,
+                    name: picked.name,
+                    source: ImageSourceType.upload,
+                  ),
+                  analysisRepository: analysisRepository,
+                  alternateSource: ImageSourceType.upload,
+                ),
+              ),
+            );
+          })
+          .catchError((Object error, StackTrace stackTrace) {
+            debugPrint('pickFiles future error: $error\n$stackTrace');
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Could not open the selected file: $error'),
+                ),
+              );
+            }
+          });
+    } catch (error, stackTrace) {
+      debugPrint('pickFiles synchronous error: $error\n$stackTrace');
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('File picker unavailable: $error')),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('New analysis')),
+      body: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Add a wound photo',
+              style: Theme.of(context).textTheme.headlineSmall,
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Choose how you want to provide the image for this analysis.',
+            ),
+            const SizedBox(height: 28),
+            _AnalysisChoiceTile(
+              icon: Icons.camera_alt_outlined,
+              title: 'Take photo',
+              subtitle: 'Use the guided camera viewfinder',
+              onTap: () => _openPicker(context, ImageSourceType.camera),
+            ),
+            const SizedBox(height: 14),
+            _AnalysisChoiceTile(
+              icon: Icons.file_upload_outlined,
+              title: 'Upload from files',
+              subtitle: 'Choose a JPEG or PNG from your device',
+              onTap: () => _openFilePicker(context),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AnalysisChoiceTile extends StatelessWidget {
+  const _AnalysisChoiceTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: Color(0xFFE0E6F2)),
+      ),
+      child: ListTile(
+        onTap: onTap,
+        contentPadding: const EdgeInsets.all(16),
+        leading: CircleAvatar(
+          backgroundColor: const Color(0xFFE8EEFF),
+          foregroundColor: const Color(0xFF2D60DB),
+          child: Icon(icon),
+        ),
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
+        subtitle: Text(subtitle),
+        trailing: const Icon(Icons.chevron_right),
+      ),
+    );
+  }
+}
+
+class GuidedCameraScreen extends StatefulWidget {
+  const GuidedCameraScreen({
+    super.key,
+    required this.patientId,
+    required this.analysisRepository,
+  });
+
+  final String patientId;
+  final AnalysisRepository analysisRepository;
+
+  @override
+  State<GuidedCameraScreen> createState() => _GuidedCameraScreenState();
+}
+
+class _GuidedCameraScreenState extends State<GuidedCameraScreen> {
+  CameraController? _controller;
+  String? _initError;
+  bool _capturing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _initCamera();
+  }
+
+  Future<void> _initCamera() async {
+    try {
+      final cameras = await availableCameras();
+      if (cameras.isEmpty) {
+        if (mounted) {
+          setState(() => _initError = 'No camera found on this device.');
+        }
+        return;
+      }
+      final controller = CameraController(
+        cameras.first,
+        ResolutionPreset.medium,
+        enableAudio: false,
+      );
+      await controller.initialize();
+      if (!mounted) {
+        await controller.dispose();
+        return;
+      }
+      setState(() => _controller = controller);
+    } catch (error) {
+      if (mounted) setState(() => _initError = 'Camera unavailable: $error');
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _capture() async {
+    final controller = _controller;
+    if (_capturing || controller == null || !controller.value.isInitialized) {
+      return;
+    }
+    setState(() => _capturing = true);
+    try {
+      final file = await controller.takePicture();
+      final image = SelectedImage(
+        bytes: await file.readAsBytes(),
+        name: file.name,
+        source: ImageSourceType.camera,
+      );
+      if (!mounted) return;
+      await Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => ImageReviewScreen(
+            patientId: widget.patientId,
+            image: image,
+            analysisRepository: widget.analysisRepository,
+            alternateSource: ImageSourceType.camera,
+          ),
+        ),
+      );
+    } catch (error) {
+      if (mounted) {
+        setState(() => _initError = 'Could not capture photo: $error');
+      }
+    } finally {
+      if (mounted) setState(() => _capturing = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF172033),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF172033),
+        foregroundColor: Colors.white,
+        title: const Text('Guided camera'),
+      ),
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          Positioned.fill(
+            child: _controller == null
+                ? Center(
+                    child: _initError != null
+                        ? Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: Text(
+                              _initError!,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(color: Colors.white70),
+                            ),
+                          )
+                        : const CircularProgressIndicator(color: Colors.white),
+                  )
+                : CameraPreview(_controller!),
+          ),
+          Positioned.fill(child: CustomPaint(painter: _FramingGuidePainter())),
+          Positioned(
+            top: 20,
+            left: 20,
+            right: 20,
+            child: Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF2D60DB).withValues(alpha: .92),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.wb_sunny_outlined, color: Colors.white),
+                  SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Move to better light and fill the guide with the wound.',
+                      style: TextStyle(color: Colors.white),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: 32,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: IconButton.filled(
+                onPressed:
+                    _controller?.value.isInitialized == true && !_capturing
+                    ? _capture
+                    : null,
+                tooltip: 'Capture photo',
+                iconSize: 36,
+                padding: const EdgeInsets.all(18),
+                icon: _capturing
+                    ? const SizedBox.square(
+                        dimension: 36,
+                        child: CircularProgressIndicator(color: Colors.white),
+                      )
+                    : const Icon(Icons.camera_alt),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FramingGuidePainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.white.withValues(alpha: .72)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2;
+    final guide = Rect.fromCenter(
+      center: Offset(size.width / 2, size.height / 2),
+      width: size.width * .72,
+      height: size.height * .42,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(guide, const Radius.circular(24)),
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class ImageReviewScreen extends StatefulWidget {
+  const ImageReviewScreen({
+    super.key,
+    required this.patientId,
+    required this.image,
+    required this.analysisRepository,
+    required this.alternateSource,
+  });
+
+  final String patientId;
+  final SelectedImage image;
+  final AnalysisRepository analysisRepository;
+  final ImageSourceType alternateSource;
+
+  @override
+  State<ImageReviewScreen> createState() => _ImageReviewScreenState();
+}
+
+class _ImageReviewScreenState extends State<ImageReviewScreen> {
+  String? _error;
+  bool _uploading = false;
+  double _uploadProgress = 0;
+
+  Future<String?> _validate() async {
+    final lowerName = widget.image.name.toLowerCase();
+    if (!lowerName.endsWith('.jpg') &&
+        !lowerName.endsWith('.jpeg') &&
+        !lowerName.endsWith('.png')) {
+      return 'Only JPEG and PNG images can be uploaded.';
+    }
+    if (widget.image.bytes.length > 15 * 1024 * 1024) {
+      return 'This image is larger than 15 MB. Choose a smaller file.';
+    }
+    try {
+      final codec = await ui.instantiateImageCodec(
+        Uint8List.fromList(widget.image.bytes),
+      );
+      final frame = await codec.getNextFrame();
+      final image = frame.image;
+      final tooSmall = image.width < 400 || image.height < 400;
+      image.dispose();
+      codec.dispose();
+      if (tooSmall) {
+        return 'Image resolution too low - please retake or choose a larger photo.';
+      }
+    } catch (_) {
+      return 'The selected file could not be read as an image.';
+    }
+    return null;
+  }
+
+  Future<void> _continue() async {
+    setState(() => _error = null);
+    final validationError = await _validate();
+    if (!mounted) return;
+    if (validationError != null) {
+      setState(() => _error = validationError);
+      return;
+    }
+    setState(() {
+      _uploading = true;
+      _uploadProgress = 0;
+    });
+    try {
+      final result = await widget.analysisRepository.submit(
+        patientId: widget.patientId,
+        image: widget.image,
+        onProgress: (progress) {
+          if (mounted) setState(() => _uploadProgress = progress.clamp(0, 1));
+        },
+      );
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Upload started'),
+          content: Text('Analysis ${result.analysisId} is ${result.status}.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Done'),
+            ),
+          ],
+        ),
+      );
+      if (mounted) Navigator.of(context).popUntil((route) => route.isFirst);
+    } on AnalysisUploadException catch (error) {
+      if (mounted) {
+        setState(() {
+          _uploading = false;
+          _error = error.message;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _uploading = false;
+          _error = 'Upload failed - check your connection and try again.';
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Review photo')),
+      body: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: Container(
+                  width: double.infinity,
+                  color: const Color(0xFFF1F4FA),
+                  child: Image.memory(
+                    Uint8List.fromList(widget.image.bytes),
+                    fit: BoxFit.contain,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              widget.image.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                _error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ],
+            if (_uploading) ...[
+              const SizedBox(height: 12),
+              LinearProgressIndicator(
+                value: _uploadProgress == 0 ? null : _uploadProgress,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                _uploadProgress == 0
+                    ? 'Preparing upload...'
+                    : 'Uploading ${(_uploadProgress * 100).round()}%',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ],
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _uploading
+                        ? null
+                        : () => Navigator.of(context).pop(),
+                    icon: Icon(
+                      widget.alternateSource == ImageSourceType.camera
+                          ? Icons.refresh
+                          : Icons.folder_open,
+                    ),
+                    label: Text(
+                      widget.alternateSource == ImageSourceType.camera
+                          ? 'Retake'
+                          : 'Choose different',
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: _uploading ? null : _continue,
+                    icon: _uploading
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(Icons.cloud_upload_outlined),
+                    label: Text(_uploading ? 'Uploading...' : 'Continue'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

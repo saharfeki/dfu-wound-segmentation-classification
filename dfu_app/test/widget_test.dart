@@ -34,4 +34,26 @@ void main() {
     expect(find.text('Welcome back'), findsOneWidget);
     expect(find.textContaining('Enter a valid email'), findsOneWidget);
   });
+
+  testWidgets('patient detail opens the new analysis choices', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(const DfuApp());
+    await tester.enterText(
+      find.byType(TextField).at(0),
+      'clinician@example.com',
+    );
+    await tester.enterText(find.byType(TextField).at(1), 'password');
+    await tester.tap(find.text('Sign in'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Amina Yusuf'));
+    await tester.pumpAndSettle();
+    expect(find.text('New analysis'), findsOneWidget);
+
+    await tester.tap(find.text('New analysis'));
+    await tester.pumpAndSettle();
+    expect(find.text('Take photo'), findsOneWidget);
+    expect(find.text('Upload from files'), findsOneWidget);
+  });
 }
